@@ -78,6 +78,11 @@ static const int kBirthdayDay = 10;
 static const int kBirthdayMonth = 11;
 static const int kBirthdayYear = 1976;
 
+static firebase::App* g_app = nullptr;
+static firebase::admob::BannerView* g_banner = nullptr;
+static firebase::admob::AdRequest g_request;
+static LoggingBannerViewListener g_banner_listener;
+
 static void WaitForFutureCompletion(firebase::FutureBase future) {
   while (!ProcessEvents(1000)) {
     if (future.Status() != firebase::kFutureStatusPending) {
@@ -91,51 +96,48 @@ static void WaitForFutureCompletion(firebase::FutureBase future) {
   }
 }
 
-// Execute all methods of the C++ admob API.
-extern "C" int common_main(int argc, const char* argv[]) {
-  firebase::App* app;
-  LogMessage("Initializing the AdMob library.");
-
+// Initializes Firebase if it's not already initialized.
+void InitializeFirebase() {
+  if (g_app) return;
 #if defined(__ANDROID__)
-  app =
-      firebase::App::Create(firebase::AppOptions(), GetJniEnv(), GetActivity());
+  g_app = firebase::App::Create(firebase::AppOptions(), GetJniEnv(),
+								GetActivity());
 #else
-  app = firebase::App::Create(firebase::AppOptions());
+  g_app = firebase::App::Create(firebase::AppOptions());
 #endif  // defined(__ANDROID__)
 
   LogMessage("Created the Firebase App %x.",
-             static_cast<int>(reinterpret_cast<intptr_t>(app)));
+             static_cast<int>(reinterpret_cast<intptr_t>(g_app)));
 
   LogMessage("Initializing the AdMob with Firebase API.");
-  firebase::admob::Initialize(*app);
+  firebase::admob::Initialize(*g_app);
 
-  firebase::admob::AdRequest request;
   // If the app is aware of the user's gender, it can be added to the targeting
   // information. Otherwise, "unknown" should be used.
-  request.gender = firebase::admob::kGenderUnknown;
+  g_request.gender = firebase::admob::kGenderUnknown;
 
   // This value allows publishers to specify whether they would like the request
   // to be treated as child-directed for purposes of the Children’s Online
   // Privacy Protection Act (COPPA).
   // See http://business.ftc.gov/privacy-and-security/childrens-privacy.
-  request.tagged_for_child_directed_treatment =
+  g_request.tagged_for_child_directed_treatment =
       firebase::admob::kChildDirectedTreatmentStateTagged;
 
   // The user's birthday, if known. Note that months are indexed from one.
-  request.birthday_day = kBirthdayDay;
-  request.birthday_month = kBirthdayMonth;
-  request.birthday_year = kBirthdayYear;
+  g_request.birthday_day = kBirthdayDay;
+  g_request.birthday_month = kBirthdayMonth;
+  g_request.birthday_year = kBirthdayYear;
 
   // Additional keywords to be used in targeting.
-  request.keyword_count = sizeof(kKeywords) / sizeof(kKeywords[0]);
-  request.keywords = kKeywords;
+  g_request.keyword_count = sizeof(kKeywords) / sizeof(kKeywords[0]);
+  g_request.keywords = kKeywords;
 
   // "Extra" key value pairs can be added to the request as well. Typically
   // these are used when testing new features.
   static const firebase::admob::KeyValuePair kRequestExtras[] = {
       {"the_name_of_an_extra", "the_value_for_that_extra"}};
-  request.extras_count = sizeof(kRequestExtras) / sizeof(kRequestExtras[0]);
-  request.extras = kRequestExtras;
+  g_request.extras_count = sizeof(kRequestExtras) / sizeof(kRequestExtras[0]);
+  g_request.extras = kRequestExtras;
 
   // This example uses ad units that are specially configured to return test ads
   // for every request. When using your own ad unit IDs, however, it's important
@@ -145,9 +147,9 @@ extern "C" int common_main(int argc, const char* argv[]) {
   //
   // Device IDs can be obtained by checking the logcat or the Xcode log while
   // debugging. They appear as a long string of hex characters.
-  request.test_device_id_count =
+  g_request.test_device_id_count =
       sizeof(kTestDeviceIDs) / sizeof(kTestDeviceIDs[0]);
-  request.test_device_ids = kTestDeviceIDs;
+  g_request.test_device_ids = kTestDeviceIDs;
 
   // Create an ad size for the BannerView.
   firebase::admob::AdSize ad_size;
@@ -156,93 +158,105 @@ extern "C" int common_main(int argc, const char* argv[]) {
   ad_size.height = kBannerHeight;
 
   LogMessage("Creating the BannerView.");
-  LoggingBannerViewListener banner_listener;
-  firebase::admob::BannerView* banner = new firebase::admob::BannerView();
-  banner->SetListener(&banner_listener);
-  banner->Initialize(GetWindowContext(), kBannerAdUnit, ad_size);
+  g_banner = new firebase::admob::BannerView();
+  g_banner->SetListener(&g_banner_listener);
+  g_banner->Initialize(GetWindowContext(), kBannerAdUnit, ad_size);
 
-  WaitForFutureCompletion(banner->InitializeLastResult());
+  WaitForFutureCompletion(g_banner->InitializeLastResult());
 
   // Make the BannerView visible.
   LogMessage("Showing the banner ad.");
-  banner->Show();
+  g_banner->Show();
 
-  WaitForFutureCompletion(banner->ShowLastResult());
+  // Wait for Ad show to complete.
+  WaitForFutureCompletion(g_banner->ShowLastResult());
 
   // When the BannerView is visible, load an ad into it.
   LogMessage("Loading a banner ad.");
-  banner->LoadAd(request);
+  g_banner->LoadAd(g_request);
+}
 
-  WaitForFutureCompletion(banner->LoadAdLastResult());
+// Execute all methods of the C++ admob API.
+extern "C" int common_main(int argc, const char* argv[]) {
+  firebase::App* app;
+  LogMessage("Initializing the AdMob library.");
+  InitializeFirebase();
+
+  // Wait for the load request to complete.
+  WaitForFutureCompletion(g_banner->LoadAdLastResult());
 
   // Move to each of the six pre-defined positions.
   LogMessage("Moving the banner ad to top-center.");
-  banner->MoveTo(firebase::admob::BannerView::kPositionTop);
+  g_banner->MoveTo(firebase::admob::BannerView::kPositionTop);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  // Move to each of the six pre-defined positions.
+  LogMessage("Moving the banner ad to top-center.");
+  g_banner->MoveTo(firebase::admob::BannerView::kPositionTop);
+
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   LogMessage("Moving the banner ad to top-left.");
-  banner->MoveTo(firebase::admob::BannerView::kPositionTopLeft);
+  g_banner->MoveTo(firebase::admob::BannerView::kPositionTopLeft);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   LogMessage("Moving the banner ad to top-right.");
-  banner->MoveTo(firebase::admob::BannerView::kPositionTopRight);
+  g_banner->MoveTo(firebase::admob::BannerView::kPositionTopRight);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   LogMessage("Moving the banner ad to bottom-center.");
-  banner->MoveTo(firebase::admob::BannerView::kPositionBottom);
+  g_banner->MoveTo(firebase::admob::BannerView::kPositionBottom);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   LogMessage("Moving the banner ad to bottom-left.");
-  banner->MoveTo(firebase::admob::BannerView::kPositionBottomLeft);
+  g_banner->MoveTo(firebase::admob::BannerView::kPositionBottomLeft);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   LogMessage("Moving the banner ad to bottom-right.");
-  banner->MoveTo(firebase::admob::BannerView::kPositionBottomRight);
+  g_banner->MoveTo(firebase::admob::BannerView::kPositionBottomRight);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   // Try some coordinate moves.
   LogMessage("Moving the banner ad to (100, 300).");
-  banner->MoveTo(100, 300);
+  g_banner->MoveTo(100, 300);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   LogMessage("Moving the banner ad to (100, 400).");
-  banner->MoveTo(100, 400);
+  g_banner->MoveTo(100, 400);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   // Try hiding and showing the BannerView.
   LogMessage("Hiding the banner ad.");
-  banner->Hide();
+  g_banner->Hide();
 
-  WaitForFutureCompletion(banner->HideLastResult());
+  WaitForFutureCompletion(g_banner->HideLastResult());
 
   LogMessage("Showing the banner ad.");
-  banner->Show();
+  g_banner->Show();
 
-  WaitForFutureCompletion(banner->ShowLastResult());
+  WaitForFutureCompletion(g_banner->ShowLastResult());
 
   // A few last moves after showing it again.
   LogMessage("Moving the banner ad to (100, 300).");
-  banner->MoveTo(100, 300);
+  g_banner->MoveTo(100, 300);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   LogMessage("Moving the banner ad to (100, 400).");
-  banner->MoveTo(100, 400);
+  g_banner->MoveTo(100, 400);
 
-  WaitForFutureCompletion(banner->MoveToLastResult());
+  WaitForFutureCompletion(g_banner->MoveToLastResult());
 
   LogMessage("Hiding the banner ad now that we're done with it.");
-  banner->Hide();
+  g_banner->Hide();
 
-  WaitForFutureCompletion(banner->HideLastResult());
+  WaitForFutureCompletion(g_banner->HideLastResult());
 
   // Create and test InterstitialAd.
   LogMessage("Creating the InterstitialAd.");
@@ -256,7 +270,7 @@ extern "C" int common_main(int argc, const char* argv[]) {
 
   // When the InterstitialAd is initialized, load an ad.
   LogMessage("Loading an interstitial ad.");
-  interstitial->LoadAd(request);
+  interstitial->LoadAd(g_request);
 
   WaitForFutureCompletion(interstitial->LoadAdLastResult());
 
@@ -279,10 +293,12 @@ extern "C" int common_main(int argc, const char* argv[]) {
   while (!ProcessEvents(1000)) {
   }
 
-  delete banner;
+  delete g_banner;
+  g_banner = nullptr;
   delete interstitial;
   firebase::admob::Terminate();
-  delete app;
+  delete g_app;
+  g_app = nullptr;
 
   return 0;
 }
