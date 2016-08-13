@@ -6,6 +6,7 @@ import android.app.Activity;
 import android.app.NativeActivity;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
 
 import android.util.Log;  // DEBUG
 
@@ -21,19 +22,28 @@ public class TestappNativeActivity extends NativeActivity {
 
   private void displayFocus(String method) {
     Log.v(TAG, method + "(), Window: " + getWindow() + " Focus: " +
-		  hasWindowFocus());
+          hasWindowFocus());
   }
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
-	displayFocus("onCreate");
+    displayFocus("onCreate");
+    // Initialize Firebase.  Initialization is performed on a different thread
+    // to allow for UI operations to proceed.
+    final Activity activity = this;
+    new Handler().post(new Runnable() {
+            @Override
+            public void run() {
+                nativeInit(activity);
+            }
+        });
   }
 
   @Override
   protected void onStart() {
     super.onStart();
-	displayFocus("onStart");
+    displayFocus("onStart");
   }
 
   @Override
@@ -41,17 +51,17 @@ public class TestappNativeActivity extends NativeActivity {
    displayFocus("onWindowFocusChanged");
    if (hasFocus) {
      // This will enter native_app_glue which spawns the C++ main thread.
-	 // The main thread will block if INIT_IN_ACTIVITY_ONCREATE is 1
-	 // in android_main.cc, waiting until nativeOnCreate() is complete before
+     // The main thread will block if INIT_IN_ACTIVITY_ONCREATE is 1
+     // in android_main.cc, waiting until nativeOnCreate() is complete before
      // executing.
-	 nativeInit(this);  // Initialize Firebase.
+     nativeInit(this);  // Initialize Firebase.
    }
   }
 
   @Override
   protected void onResume() {
-	super.onResume();
-	displayFocus("onResume");
+    super.onResume();
+    displayFocus("onResume");
   }
 
   private native void nativeInit(Activity activity);

@@ -48,14 +48,16 @@ static bool g_initialized = false;
 #endif  // INIT_IN_ACTIVITY_ON_FOCUS
 
 extern void InitializeFirebase();
+void CheckJNIException();
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_google_firebase_example_TestappNativeActivity_nativeInit(
     JNIEnv *env, jobject thiz, jobject activity) {
 #if INIT_IN_ACTIVITY_ON_FOCUS
+  LogMessage("Early init called.");
+  // Initialize Firebase.
   g_jni_env = env;
   g_activity = activity;
-  LogMessage("Init called on focus.");
   // NOTE: It's not possible to execute UI methods yet as no window exists.
   InitializeFirebase();
   pthread_mutex_lock(&g_init_mutex);
@@ -63,7 +65,7 @@ Java_com_google_firebase_example_TestappNativeActivity_nativeInit(
   pthread_mutex_unlock(&g_init_mutex);
   g_jni_env = nullptr;
   g_activity = nullptr;
-  LogMessage("Init on focus complete");
+  LogMessage("Early init complete");
   pthread_cond_signal(&g_init_cond);
 #endif  // INIT_IN_ACTIVITY_ON_FOCUS
 }
@@ -76,23 +78,28 @@ static void OnAppCmd(struct android_app* app, int32_t cmd) {
 // Process events pending on the main thread.
 // Returns true when the app receives an event requesting exit.
 bool ProcessEvents(int msec) {
-  if (pthread_equal(g_main_thread, pthread_self())) {
-	struct android_poll_source* source = nullptr;
-	int events;
-	int looperId = ALooper_pollAll(msec, nullptr, &events,
-								   reinterpret_cast<void**>(&source));
-	if (looperId >= 0 && source) {
-	  source->process(g_app_state, source);
-	}
-  } else {
-	usleep(1000 * msec);
+#if INIT_IN_ACTIVITY_ON_FOCUS
+  if (!pthread_equal(g_main_thread, pthread_self())) {
+    usleep(1000 * msec);
+    return g_destroy_requested | g_restarted;
+  }
+#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+  struct android_poll_source* source = nullptr;
+  int events;
+  int looperId = ALooper_pollAll(msec, nullptr, &events,
+                                 reinterpret_cast<void**>(&source));
+  if (looperId >= 0 && source) {
+    source->process(g_app_state, source);
   }
   return g_destroy_requested | g_restarted;
 }
 
 // Get the activity.
 jobject GetActivity() {
-  return g_activity ? g_activity : g_app_state->activity->clazz;
+#if INIT_IN_ACTIVITY_ON_FOCUS
+  if (!pthread_equal(g_main_thread, pthread_self())) return g_activity;
+#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+  return g_app_state->activity->clazz;
 }
 
 // Get the window context. For Android, it's a jobject pointing to the Activity.
@@ -108,20 +115,27 @@ jclass FindClass(JNIEnv* env, jobject activity_object, const char* class_name) {
     // classes.  The following falls back to loading the class using the
     // Activity before retrieving a reference to it.
     jclass activity_class = env->FindClass("android/app/Activity");
+    assert(activity_class);
     jmethodID activity_get_class_loader = env->GetMethodID(
         activity_class, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    assert(activity_get_class_loader);
 
     jobject class_loader_object =
         env->CallObjectMethod(activity_object, activity_get_class_loader);
+    assert(class_loader_object);
 
     jclass class_loader_class = env->FindClass("java/lang/ClassLoader");
+    assert(class_loader_class);
     jmethodID class_loader_load_class =
         env->GetMethodID(class_loader_class, "loadClass",
                          "(Ljava/lang/String;)Ljava/lang/Class;");
+    assert(class_loader_load_class);
     jstring class_name_object = env->NewStringUTF(class_name);
+    assert(class_name_object);
 
     class_object = static_cast<jclass>(env->CallObjectMethod(
         class_loader_object, class_loader_load_class, class_name_object));
+    assert(class_object);
 
     if (env->ExceptionCheck()) {
       env->ExceptionClear();
@@ -150,24 +164,31 @@ class LoggingUtilsData {
   }
 
   void Init() {
+    LogMessage("get env");
     JNIEnv* env = GetJniEnv();
     assert(env);
 
+    LogMessage("find logging utils");
     jclass logging_utils_class = FindClass(
         env, GetActivity(), "com/google/firebase/example/LoggingUtils");
+    CheckJNIException();
     assert(logging_utils_class != 0);
 
+    LogMessage("reference class");
     // Need to store as global references so it don't get moved during garbage
     // collection.
     logging_utils_class_ =
         static_cast<jclass>(env->NewGlobalRef(logging_utils_class));
     env->DeleteLocalRef(logging_utils_class);
 
+    LogMessage("get init log window");
     logging_utils_init_log_window_ = env->GetStaticMethodID(
         logging_utils_class_, "initLogWindow", "(Landroid/app/Activity;)V");
+    LogMessage("get add log text");
     logging_utils_add_log_text_ = env->GetStaticMethodID(
         logging_utils_class_, "addLogText", "(Ljava/lang/String;)V");
 
+    LogMessage("call init");
     env->CallStaticVoidMethod(logging_utils_class_,
                               logging_utils_init_log_window_, GetActivity());
   }
@@ -237,16 +258,24 @@ void LogMessage(const char* format, ...) {
   buffer[string_len + 1] = '\0';
 
   __android_log_vprint(ANDROID_LOG_INFO, FIREBASE_TESTAPP_NAME, format, list);
+#if INIT_IN_ACTIVITY_ON_FOCUS
+  if (pthread_equal(g_main_thread, pthread_self())) {
+#endif  // INIT_IN_ACTIVITY_ON_FOCUS
   if (g_logging_utils_data) {
-	g_logging_utils_data->AppendText(buffer);
-	CheckJNIException();
+    g_logging_utils_data->AppendText(buffer);
+    CheckJNIException();
   }
+#if INIT_IN_ACTIVITY_ON_FOCUS
+  }
+#endif  // INIT_IN_ACTIVITY_ON_FOCUS
   va_end(list);
 }
 
 // Get the JNI environment.
 JNIEnv* GetJniEnv() {
-  if (g_jni_env) return g_jni_env;
+#if INIT_IN_ACTIVITY_ON_FOCUS
+  if (!pthread_equal(g_main_thread, pthread_self())) return g_jni_env;
+#endif  // INIT_IN_ACTIVITY_ON_FOCUS
   JavaVM* vm = g_app_state->activity->vm;
   JNIEnv* env;
   jint result = vm->AttachCurrentThread(&env, nullptr);
@@ -269,7 +298,9 @@ extern "C" void android_main(struct android_app* state) {
     g_started_mutex = PTHREAD_MUTEX_INITIALIZER;
   }
   pthread_mutex_lock(&g_started_mutex);
+#if INIT_IN_ACTIVITY_ON_FOCUS
   g_main_thread = pthread_self();
+#endif  // INIT_IN_ACTIVITY_ON_FOCUS
   g_started = true;
 
   // Save native app glue state and setup a callback to track the state.
@@ -279,32 +310,48 @@ extern "C" void android_main(struct android_app* state) {
 
   // Create the logging display.
   {
-	LoggingUtilsData* logging_utils_data = new LoggingUtilsData();
-	logging_utils_data->Init();
-	g_logging_utils_data = logging_utils_data;
+    LoggingUtilsData* logging_utils_data = new LoggingUtilsData();
+    logging_utils_data->Init();
+    g_logging_utils_data = logging_utils_data;
   }
 
 #if INIT_IN_ACTIVITY_ON_FOCUS
+  LogMessage("Logging display up");
+
   // Wait for nativeInit() to complete.
   pthread_mutex_lock(&g_init_mutex);
   struct timespec time_to_wait_for;
-  do {
-	if (ProcessEvents(10)) {
-	  break;
-	}
-	// Wait for the condition with a timeout of 1ms.
-	static const int64_t nsec_per_sec = 1000000000;
-	static const int64_t nsec_per_ms = nsec_per_sec / 1000;
-	clock_gettime(CLOCK_REALTIME, &time_to_wait_for);
-	int64_t nsec = time_to_wait_for.tv_nsec;
-	nsec += nsec_per_ms * 10;
-	time_to_wait_for.tv_nsec = nsec % nsec_per_sec;
-	time_to_wait_for.tv_sec += nsec / nsec_per_sec;
-  } while (!g_initialized &&
-		   pthread_cond_timedwait(&g_init_cond, &g_init_mutex,
-								  &time_to_wait_for) == ETIMEDOUT);
+  while (!g_initialized) {
+    if (ProcessEvents(10)) {
+      break;
+    }
+    // Wait for the condition with a timeout of 1ms.
+    static const int64_t nsec_per_sec = 1000000000;
+    static const int64_t nsec_per_ms = nsec_per_sec / 1000;
+    clock_gettime(CLOCK_REALTIME, &time_to_wait_for);
+    int64_t nsec = time_to_wait_for.tv_nsec;
+    nsec += nsec_per_ms * 10;
+    time_to_wait_for.tv_nsec = nsec % nsec_per_sec;
+    time_to_wait_for.tv_sec += nsec / nsec_per_sec;
+    pthread_cond_timedwait(&g_init_cond, &g_init_mutex, &time_to_wait_for);
+  }
   pthread_mutex_unlock(&g_init_mutex);
+
 #endif  // INIT_IN_ACTIVITY_ON_FOCUS
+  // Wait for the window to gain focus.
+  // This is required as we can't show an Ad (it's a popup window) until the
+  // window is in focus.
+  {
+    JNIEnv *env = GetJniEnv();
+    jclass activity_class = env->FindClass("android/app/Activity");
+    assert(activity_class);
+    jmethodID activity_has_window_focus = env->GetMethodID(
+      activity_class, "hasWindowFocus", "()Z");
+    assert(activity_has_window_focus);
+    while (!env->CallBooleanMethod(GetActivity(), activity_has_window_focus) &&
+           !ProcessEvents(10)) {
+    }
+  }
 
   // Execute cross platform entry point.
   static const char* argv[] = {FIREBASE_TESTAPP_NAME};

@@ -99,9 +99,10 @@ static void WaitForFutureCompletion(firebase::FutureBase future) {
 // Initializes Firebase if it's not already initialized.
 void InitializeFirebase() {
   if (g_app) return;
+  LogMessage("Initializing the AdMob library.");
 #if defined(__ANDROID__)
   g_app = firebase::App::Create(firebase::AppOptions(), GetJniEnv(),
-								GetActivity());
+                                GetActivity());
 #else
   g_app = firebase::App::Create(firebase::AppOptions());
 #endif  // defined(__ANDROID__)
@@ -161,15 +162,7 @@ void InitializeFirebase() {
   g_banner = new firebase::admob::BannerView();
   g_banner->SetListener(&g_banner_listener);
   g_banner->Initialize(GetWindowContext(), kBannerAdUnit, ad_size);
-
   WaitForFutureCompletion(g_banner->InitializeLastResult());
-
-  // Make the BannerView visible.
-  LogMessage("Showing the banner ad.");
-  g_banner->Show();
-
-  // Wait for Ad show to complete.
-  WaitForFutureCompletion(g_banner->ShowLastResult());
 
   // When the BannerView is visible, load an ad into it.
   LogMessage("Loading a banner ad.");
@@ -179,11 +172,17 @@ void InitializeFirebase() {
 // Execute all methods of the C++ admob API.
 extern "C" int common_main(int argc, const char* argv[]) {
   firebase::App* app;
-  LogMessage("Initializing the AdMob library.");
   InitializeFirebase();
 
   // Wait for the load request to complete.
   WaitForFutureCompletion(g_banner->LoadAdLastResult());
+
+  // Make the BannerView visible.
+  LogMessage("Showing the banner ad.");
+  g_banner->Show();
+
+  // Wait for Ad show to complete.
+  WaitForFutureCompletion(g_banner->ShowLastResult());
 
   // Move to each of the six pre-defined positions.
   LogMessage("Moving the banner ad to top-center.");
