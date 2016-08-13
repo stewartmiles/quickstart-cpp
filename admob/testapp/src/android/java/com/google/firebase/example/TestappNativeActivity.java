@@ -49,13 +49,6 @@ public class TestappNativeActivity extends NativeActivity {
   @Override
   public void onWindowFocusChanged(boolean hasFocus) {
    displayFocus("onWindowFocusChanged");
-   if (hasFocus) {
-     // This will enter native_app_glue which spawns the C++ main thread.
-     // The main thread will block if INIT_IN_ACTIVITY_ONCREATE is 1
-     // in android_main.cc, waiting until nativeOnCreate() is complete before
-     // executing.
-     nativeInit(this);  // Initialize Firebase.
-   }
   }
 
   @Override

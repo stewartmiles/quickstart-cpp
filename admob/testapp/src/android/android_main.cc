@@ -26,7 +26,8 @@
 
 #include "main.h"  // NOLINT
 
-#define INIT_IN_ACTIVITY_ON_FOCUS 1
+#define INIT_IN_ACTIVITY_ON_CREATE 1
+#define WAIT_FOR_ACTIVITY_FOCUS 0
 
 // This implementation is derived from http://github.com/google/fplutil
 
@@ -40,12 +41,12 @@ static pthread_mutex_t g_started_mutex;
 static JNIEnv* g_jni_env = nullptr;
 static jobject g_activity = nullptr;
 
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
 static pthread_cond_t g_init_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t g_init_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_main_thread = 0;
 static bool g_initialized = false;
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
 
 extern void InitializeFirebase();
 void CheckJNIException();
@@ -53,7 +54,7 @@ void CheckJNIException();
 extern "C" JNIEXPORT void JNICALL
 Java_com_google_firebase_example_TestappNativeActivity_nativeInit(
     JNIEnv *env, jobject thiz, jobject activity) {
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   LogMessage("Early init called.");
   // Initialize Firebase.
   g_jni_env = env;
@@ -67,7 +68,7 @@ Java_com_google_firebase_example_TestappNativeActivity_nativeInit(
   g_activity = nullptr;
   LogMessage("Early init complete");
   pthread_cond_signal(&g_init_cond);
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
 }
 
 // Handle state changes from via native app glue.
@@ -78,12 +79,12 @@ static void OnAppCmd(struct android_app* app, int32_t cmd) {
 // Process events pending on the main thread.
 // Returns true when the app receives an event requesting exit.
 bool ProcessEvents(int msec) {
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   if (!pthread_equal(g_main_thread, pthread_self())) {
     usleep(1000 * msec);
     return g_destroy_requested | g_restarted;
   }
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
   struct android_poll_source* source = nullptr;
   int events;
   int looperId = ALooper_pollAll(msec, nullptr, &events,
@@ -96,9 +97,9 @@ bool ProcessEvents(int msec) {
 
 // Get the activity.
 jobject GetActivity() {
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   if (!pthread_equal(g_main_thread, pthread_self())) return g_activity;
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
   return g_app_state->activity->clazz;
 }
 
@@ -258,24 +259,24 @@ void LogMessage(const char* format, ...) {
   buffer[string_len + 1] = '\0';
 
   __android_log_vprint(ANDROID_LOG_INFO, FIREBASE_TESTAPP_NAME, format, list);
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   if (pthread_equal(g_main_thread, pthread_self())) {
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
   if (g_logging_utils_data) {
     g_logging_utils_data->AppendText(buffer);
     CheckJNIException();
   }
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   }
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
   va_end(list);
 }
 
 // Get the JNI environment.
 JNIEnv* GetJniEnv() {
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   if (!pthread_equal(g_main_thread, pthread_self())) return g_jni_env;
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
   JavaVM* vm = g_app_state->activity->vm;
   JNIEnv* env;
   jint result = vm->AttachCurrentThread(&env, nullptr);
@@ -298,9 +299,9 @@ extern "C" void android_main(struct android_app* state) {
     g_started_mutex = PTHREAD_MUTEX_INITIALIZER;
   }
   pthread_mutex_lock(&g_started_mutex);
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   g_main_thread = pthread_self();
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
   g_started = true;
 
   // Save native app glue state and setup a callback to track the state.
@@ -315,7 +316,7 @@ extern "C" void android_main(struct android_app* state) {
     g_logging_utils_data = logging_utils_data;
   }
 
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   LogMessage("Logging display up");
 
   // Wait for nativeInit() to complete.
@@ -337,7 +338,8 @@ extern "C" void android_main(struct android_app* state) {
   }
   pthread_mutex_unlock(&g_init_mutex);
 
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
+#if WAIT_FOR_ACTIVITY_FOCUS
   // Wait for the window to gain focus.
   // This is required as we can't show an Ad (it's a popup window) until the
   // window is in focus.
@@ -352,6 +354,7 @@ extern "C" void android_main(struct android_app* state) {
            !ProcessEvents(10)) {
     }
   }
+#endif  // WAIT_FOR_ACTIVITY_FOCUS
 
   // Execute cross platform entry point.
   static const char* argv[] = {FIREBASE_TESTAPP_NAME};
@@ -363,9 +366,9 @@ extern "C" void android_main(struct android_app* state) {
   delete g_logging_utils_data;
   g_logging_utils_data = nullptr;
 
-#if INIT_IN_ACTIVITY_ON_FOCUS
+#if INIT_IN_ACTIVITY_ON_CREATE
   g_initialized = false;
-#endif  // INIT_IN_ACTIVITY_ON_FOCUS
+#endif  // INIT_IN_ACTIVITY_ON_CREATE
 
   // Finish the activity.
   if (!g_restarted) ANativeActivity_finish(state->activity);

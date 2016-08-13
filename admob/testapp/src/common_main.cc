@@ -167,6 +167,10 @@ void InitializeFirebase() {
   // When the BannerView is visible, load an ad into it.
   LogMessage("Loading a banner ad.");
   g_banner->LoadAd(g_request);
+
+  // Make the BannerView visible.
+  LogMessage("Showing the banner ad.");
+  g_banner->Show();
 }
 
 // Execute all methods of the C++ admob API.
@@ -176,10 +180,6 @@ extern "C" int common_main(int argc, const char* argv[]) {
 
   // Wait for the load request to complete.
   WaitForFutureCompletion(g_banner->LoadAdLastResult());
-
-  // Make the BannerView visible.
-  LogMessage("Showing the banner ad.");
-  g_banner->Show();
 
   // Wait for Ad show to complete.
   WaitForFutureCompletion(g_banner->ShowLastResult());
